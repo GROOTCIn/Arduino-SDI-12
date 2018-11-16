@@ -54,6 +54,17 @@ typedef const __FlashStringHelper *FlashString;
 #define NO_IGNORE_CHAR '\x01' // a char not found in a valid ASCII numeric field
 #define SDI12_BUFFER_SIZE 64   // max Rx buffer size
 
+#if defined(ESP32)
+// This enumeration provides the lookahead options for parseInt(), parseFloat()
+// The rules set out here are used until either the first valid character is found
+// or a time out occurs due to lack of input.
+enum LookaheadMode{
+    SKIP_ALL,       // All invalid characters are ignored.
+    SKIP_NONE,      // Nothing is skipped, and the stream is not touched unless the first waiting character is valid.
+    SKIP_WHITESPACE // Only tabs, spaces, line feeds & carriage returns are skipped.
+};
+#endif
+
 class SDI12 : public Stream
 {
 protected:
@@ -61,8 +72,18 @@ protected:
   int peekNextDigit(LookaheadMode lookahead, bool detectDecimal);
 
 private:
-
+  
   // For the various SDI12 states
+  #if defined(ESP32)
+  typedef enum SDI12_STATES
+  {
+    _DISABLED = 0,
+    ENABLED = 1,
+    HOLDING = 2,
+    TRANSMITTING = 3,
+    LISTENING = 4
+  } SDI12_STATES;
+  #else
   typedef enum SDI12_STATES
   {
     DISABLED = 0,
@@ -71,6 +92,7 @@ private:
     TRANSMITTING = 3,
     LISTENING = 4
   } SDI12_STATES;
+  #endif // ESP32
 
   static SDI12 *_activeObject;    // static pointer to active SDI12 instance
 
@@ -92,6 +114,7 @@ private:
   static volatile uint8_t _rxBufferTail;
   static volatile uint8_t _rxBufferHead;
   bool _bufferOverflow;           // buffer overflow status
+  uint64_t auxTimeValue;
 
 
 public:
@@ -128,7 +151,11 @@ public:
   bool setActive();         // set this instance as the active SDI-12 instance
   bool isActive();          // check if this instance is active
 
+  #if defined(ESP32)
+  static void IRAM_ATTR handleInterrupt();  // intermediary used by the ISR
+  #else
   static void handleInterrupt();  // intermediary used by the ISR
+  #endif // ESP32
 
   // #define SDI12_EXTERNAL_PCINT  // on AVR boards, uncomment to use your own PCINT ISRs
 

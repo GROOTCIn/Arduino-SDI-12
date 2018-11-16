@@ -56,7 +56,7 @@ public:
 
 // ATtiny boards (ie, adafruit trinket)
 //
-#elif defined(__AVR_ATtiny25__) | defined(__AVR_ATtiny45__) | defined(__AVR_ATtiny85__)
+#elif defined(__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
 
      #if F_CPU == 16000000L
          #define PRESCALE_IN_USE_STR "1024"
@@ -124,11 +124,25 @@ public:
         // 1/(13.0208 ticks/bit) * 2^10 = 78.6432
     #define RX_WINDOW_FUDGE 2
 
+// ESP32 boards
+//
+#elif defined(ESP32)
+    #define TIMER_IN_USE_STR "TIMER0"
+    // #define TCNTX 0  // Using Timer 0
+    // #define TCNTX getTimerMicros(this->timer)
+    #define PRESCALE_IN_USE_STR "6667"
+    #define TICKS_PER_BIT 10
+        // 80MHz / 6667 prescaler = 11999.4000 'ticks'/sec = 83.338 µs / 'tick'
+        // (1 sec/1200 bits) * (1 tick/83.338 µs) = 9,9994 ticks/bit
+    #define BITS_PER_TICK_Q10 102
+        // 1/(9.9994 ticks/bit) * 2^10 = 102.4061
+    #define RX_WINDOW_FUDGE 2
+    hw_timer_t *timer;
+
 // Unknown board
 #else
 #error "Please define your board timer and pins"
 #endif
-
 };
 
 #endif

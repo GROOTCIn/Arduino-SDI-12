@@ -65,7 +65,7 @@ SDI12Timer::SDI12Timer(){}
 
 // ATtiny boards (ie, adafruit trinket)
 //
-#elif defined(__AVR_ATtiny25__) | defined(__AVR_ATtiny45__) | defined(__AVR_ATtiny85__)
+#elif defined(__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
 
     static uint8_t preSDI12_TCCR1A;
 
@@ -192,6 +192,17 @@ SDI12Timer::SDI12Timer(){}
         while (TC4->COUNT16.STATUS.bit.SYNCBUSY);       // Wait for synchronization
     }
     void SDI12Timer::resetSDI12TimerPrescale(void){}  // NOT resetting the SAMD timers
+
+// ESP32 boards
+//
+#elif defined(ESP32)
+    void SDI12Timer::configSDI12TimerPrescale(void) {
+        this->timer = timerBegin(1, 6667, true);
+    }
+
+    void SDI12Timer::resetSDI12TimerPrescale(void) {
+        timerEnd(this->timer);
+    }
 
 // Unknown board
 #else

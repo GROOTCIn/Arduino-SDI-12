@@ -413,6 +413,15 @@ SDI12::SDI12(uint8_t dataPin){
 }
 
 //  3.2 Destructor
+#if defined(ESP32)
+SDI12::~SDI12(){
+  setState(_DISABLED);
+  _activeObject = NULL;
+  // Set the timer prescalers back to original values
+  // NOTE:  This does NOT reset SAMD board pre-scalers!
+  sdi12timer.resetSDI12TimerPrescale();
+}
+#else
 SDI12::~SDI12(){
   setState(DISABLED);
   _activeObject = NULL;
@@ -420,6 +429,7 @@ SDI12::~SDI12(){
   // NOTE:  This does NOT reset SAMD board pre-scalers!
   sdi12timer.resetSDI12TimerPrescale();
 }
+#endif // ESP32
 
 //  3.3 Begin
 void SDI12::begin(){
@@ -445,14 +455,25 @@ void SDI12::begin(uint8_t dataPin){
 }
 
 //  3.4 End
+#if defined(ESP32)
 void SDI12::end()
 {
-  setState(DISABLED);
+  setState(_DISABLED);
   _activeObject = NULL;
   // Set the timer prescalers back to original values
   // NOTE:  This does NOT reset SAMD board pre-scalers!
   sdi12timer.resetSDI12TimerPrescale();
 }
+#else
+void SDI12::end()
+{
+  setState(_DISABLED);
+  _activeObject = NULL;
+  // Set the timer prescalers back to original values
+  // NOTE:  This does NOT reset SAMD board pre-scalers!
+  sdi12timer.resetSDI12TimerPrescale();
+}
+#endif // ESP32
 
 //  3.5 Set the timeout return
 void SDI12::setTimeoutValue(int value) { TIMEOUT = value; }
@@ -616,6 +637,10 @@ void SDI12::setPinInterrupts(bool enable)
         }
         // We don't detach the function from the interrupt for AVR processors
     }
+
+  #elif defined(ESP32)
+    if (enable) attachInterrupt(digitalPinToInterrupt(_dataPin), handleInterrupt, CHANGE);  // Merely need to attach the interrupt function to the pin
+    else detachInterrupt(digitalPinToInterrupt(_dataPin));  // Merely need to detach the interrupt function from the pin
   #endif
 }
 
@@ -716,6 +741,57 @@ void SDI12::wakeSensors() {
 }
 
 // 6.2 - this function writes a character out on the data line
+#if defined(ESP32)
+void SDI12::writeChar(uint8_t outChar) {
+  uint8_t currentTxBitNum = 0; // first bit is start bit
+  uint8_t bitValue = 1; // start bit is HIGH (inverse parity...)
+
+  noInterrupts();  // _ALL_ interrupts disabled so timing can't be shifted
+  
+  digitalWrite(_dataPin, HIGH);  // immediately get going on the start bit
+  // this gives us 833µs to calculate parity and position of last high bit
+  currentTxBitNum++;
+
+  uint8_t parityBit = parity_even_bit(outChar);  // Calculate the parity bit
+  outChar |= (parityBit<<7);  // Add parity bit to the outgoing character
+
+  // Calculate the position of the last bit that is a 0/HIGH (ie, HIGH, not marking)
+  // That bit will be the last time-critical bit.  All bits after that can be
+  // sent with interrupts enabled.
+
+  uint8_t lastHighBit = 9;  // The position of the last bit that is a 0 (ie, HIGH, not marking)
+  uint8_t msbMask = 0x80;  // A mask with all bits at 1
+  while (msbMask & outChar) {
+    lastHighBit--;
+    msbMask >>= 1;
+  }
+
+  // Hold the line for the rest of the start bit duration
+  delayMicroseconds(bitWidth_micros);
+
+  // repeat for all data bits until the last bit different from marking
+  while (currentTxBitNum++ < lastHighBit) {
+    bitValue = outChar & 0x01;  // get next bit in the character to send
+    if (bitValue){
+      digitalWrite(_dataPin, LOW);  // set the pin state to LOW for 1's
+    }
+    else{
+      digitalWrite(_dataPin, HIGH);  // set the pin state to HIGH for 0's
+    }
+    // Hold the line for this bit duration
+    delayMicroseconds(bitWidth_micros);
+    outChar = outChar >> 1;  // shift character to expose the following bit
+  }
+
+  // Set the line low for the all remaining 1's and the stop bit
+  digitalWrite(_dataPin, LOW);
+
+  interrupts(); // Re-enable universal interrupts as soon as critical timing is past
+
+  // Hold the line low until the end of the 10th bit
+  delayMicroseconds(bitWidth_micros * (10 - lastHighBit));
+}
+#else
 void SDI12::writeChar(uint8_t outChar) {
   uint8_t currentTxBitNum = 0; // first bit is start bit
   uint8_t bitValue = 1; // start bit is HIGH (inverse parity...)
@@ -770,6 +846,8 @@ void SDI12::writeChar(uint8_t outChar) {
   while ((uint8_t)(TCNTX - t0) < bitTimeRemaining) {}
 
 }
+#endif // ESP32
+
 
 // The typical write functionality for a stream object
 // This allows you to use the stream print functions to send commands out on
@@ -870,9 +948,15 @@ takes to either a HIGH vs a LOW, and helps maintain a constant timing.
 the ISR is instructed to call handleInterrupt() when they trigger. */
 
 // 7.1 - Passes off responsibility for the interrupt to the active object.
+#if defined(ESP32)
+void IRAM_ATTR SDI12::handleInterrupt(){
+  if (_activeObject) _activeObject->receiveISR();
+}
+#else
 void SDI12::handleInterrupt(){
   if (_activeObject) _activeObject->receiveISR();
 }
+#endif // ESP32
 
 // 7.2 - Creates a blank slate of bits for an incoming character
 void SDI12::startChar()
@@ -885,7 +969,13 @@ void SDI12::startChar()
 // 7.3 - The actual interrupt service routine
 void SDI12::receiveISR()
 {
-  uint8_t thisBitTCNT = TCNTX;               // time of this data transition (plus ISR latency)
+  // time of this data transition (plus ISR latency)
+  #if defined(ESP32)
+  uint8_t thisBitTCNT = timerRead(sdi12timer.timer);
+  thisBitTCNT = timerRead(sdi12timer.timer);
+  #else
+  uint8_t thisBitTCNT = TCNTX;
+  #endif // ESP32
   uint8_t pinLevel = digitalRead(_dataPin);  // current RX data level
 
   // Check if we're ready for a start bit, and if this could possibly be it
@@ -908,7 +998,6 @@ void SDI12::receiveISR()
     // check how many bit times have passed since the last change
     // the rxWindowWidth is just a fudge factor
     uint16_t rxBits = bitTimes(thisBitTCNT - prevBitTCNT);
-    // Serial.println(rxBits);
     // calculate how many *data+parity* bits should be left
     // We know the start bit is past and are ignoring the stop bit (which will be LOW/1)
     // We have to treat the parity bit as a data bit because we don't know its state
